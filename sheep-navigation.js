@@ -5,6 +5,17 @@ function createSheepNavigation(sheep){
  function begin(curve,type){path=curve;path.arcLengthDivisions=600;path.updateArcLengths();length=path.getLength();distance=0;kind=type;}
  function heading(){return new THREE.Vector3(0,0,1).applyAxisAngle(up,sheep.rotation.y);}
  return {
+  cancel(){path=null;kind=null;speed=0;curvature=0;},
+  drive(dt,throttle,steering,isBlocked){
+   path=null;kind=null;
+   speed=THREE.MathUtils.damp(speed,throttle>0?.6:throttle<0?-.32:0,7,dt);
+   if(Math.abs(speed)<.003)speed=0;
+   const travel=speed*dt,turn=steering*.8*travel,angle=sheep.rotation.y+turn*.5;
+   const x=sheep.position.x+Math.sin(angle)*travel,z=sheep.position.z+Math.cos(angle)*travel,nextYaw=sheep.rotation.y+turn;
+   if(Math.abs(travel)>0&&[-.7,0,.65].some(offset=>isBlocked(x+Math.sin(nextYaw)*offset,z+Math.cos(nextYaw)*offset))){speed=0;curvature=0;return {travel:0,curvature:0,completed:null,blocked:true};}
+   sheep.position.x=x;sheep.position.z=z;sheep.rotation.y=nextYaw;curvature=steering*.8;
+   return {travel,curvature,completed:null,blocked:false};
+  },
   startStroll(){
    const origin=sheep.position.clone().setY(0),yaw=sheep.rotation.y;
    const curve=new THREE.Curve();curve.getPoint=(t,out=new THREE.Vector3())=>out.set(2.1*(Math.cos(t*Math.PI*2)-1),0,2.3*Math.sin(t*Math.PI*2)).applyAxisAngle(up,yaw).add(origin);

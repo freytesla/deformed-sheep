@@ -70,44 +70,64 @@ const sheep=new THREE.Group();sheep.name='Imported sheep';sheep.position.set(.2,
 const sheepNavigation=createSheepNavigation(sheep);
 let sheepMotion=null,sheepVariants=null,walkDistance=0;const legs=[],heads=[];let importedRoot=null,mixer=null,modelReady=false,modelError=null,headBone=null,headRest=null,bodyBone=null,bodyRest=null,neckBone=null,neckRest=null;
 $('status').textContent='正在载入羊的模型与贴图…';
-new THREE.GLTFLoader().load('sheep/source/sheep.glb',gltf=>{
- importedRoot=gltf.scene;importedRoot.updateMatrixWorld(true);
- const bounds=new THREE.Box3().setFromObject(importedRoot),size=bounds.getSize(new THREE.Vector3());
- const scale=1.7/size.y;importedRoot.scale.multiplyScalar(scale);
- importedRoot.position.set(-(bounds.min.x+bounds.max.x)*.5*scale,-bounds.min.y*scale,-(bounds.min.z+bounds.max.z)*.5*scale);
- sheep.add(importedRoot);
- importedRoot.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;o.frustumCulled=false;for(const m of (Array.isArray(o.material)?o.material:[o.material])){m.metalness=0;m.roughness=.94;if(m.map)m.map.anisotropy=Math.min(4,renderer.capabilities.getMaxAnisotropy());}}if(o.name==='Body'){bodyBone=o;bodyRest=o.position.clone();}if(o.name==='Neck2'){neckBone=o;neckRest=o.quaternion.clone();}if(o.name==='Head'){headBone=o;headRest=o.quaternion.clone();}});
- if(gltf.animations.length){mixer=new THREE.AnimationMixer(importedRoot);mixer.clipAction(gltf.animations[0]).play();mixer.update(0);}
- importedRoot.updateMatrixWorld(true);sheepMotion=createSheepMotion(importedRoot);sheepVariants=createSheepVariants(importedRoot);modelReady=true;$('status').textContent='模型已就绪。走近它，或按 C 呼唤。';
-},undefined,error=>{modelError=String(error);$('status').textContent='模型加载失败。请通过本地预览地址打开。';console.error(error);});
-document.querySelectorAll('[data-variant]').forEach(button=>button.onclick=()=>{if(!sheepVariants)return;sheepVariants.setVariant(button.dataset.variant);$('status').textContent='当前形态：'+sheepVariants.label+'。点击近看羊或走一圈。';});
+function loadGLB(url){return new Promise((resolve,reject)=>new THREE.GLTFLoader().load(url,resolve,undefined,reject));}
+function selectSheep(value){
+ if(!sheepVariants)return;sheepVariants.setVariant(value);const e=sheepVariants.entry;importedRoot=e.root;sheepMotion=e.motion;
+ headBone=e.bones.get('Head');headRest=headBone?.quaternion.clone();neckBone=e.bones.get('Neck2');neckRest=neckBone?.quaternion.clone();
+ $('status').textContent='当前：'+sheepVariants.label+'。可近看、走一圈或直接控制。';
+}
+Promise.all([loadGLB('sheep/source/sheep.glb'),loadGLB('assets/sheep-double.glb'),loadGLB('assets/sheep-eight.glb')]).then(([normal,double,eight])=>{
+ const root=normal.scene;root.updateMatrixWorld(true);const bounds=new THREE.Box3().setFromObject(root),size=bounds.getSize(new THREE.Vector3()),scale=1.7/size.y;root.scale.multiplyScalar(scale);root.position.set(-(bounds.min.x+bounds.max.x)*.5*scale,-bounds.min.y*scale,-(bounds.min.z+bounds.max.z)*.5*scale);
+ if(normal.animations.length){mixer=new THREE.AnimationMixer(root);mixer.clipAction(normal.animations[0]).play();mixer.update(0);}
+ const roots={normal:root,double:double.scene,eight:eight.scene};
+ for(const asset of Object.values(roots)){sheep.add(asset);asset.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;o.frustumCulled=false;for(const m of Array.isArray(o.material)?o.material:[o.material]){m.metalness=0;m.roughness=.94;if(m.map)m.map.anisotropy=4;}}});}
+ sheep.updateMatrixWorld(true);sheepVariants=createSheepVariants(roots);selectSheep('double');modelReady=true;
+}).catch(error=>{modelError=String(error);$('status').textContent='模型加载失败，请刷新本地预览。';console.error(error);});
+document.querySelectorAll('[data-variant]').forEach(button=>button.onclick=()=>selectSheep(button.dataset.variant));
+let caretaker=null;
+loadGLB('assets/faceless-caretaker.glb').then(g=>{caretaker=g.scene;caretaker.name='无脸牧场主人';caretaker.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}});models.add(caretaker);}).catch(console.error);
 // Handheld beam follows the view; moonlight still reveals the surrounding silhouettes.
 const torch=new THREE.SpotLight(0xe5e0ce,1.9,24,.47,.65,1.25);torch.castShadow=true;torch.shadow.mapSize.set(1024,1024);torch.shadow.bias=-.001;scene.add(torch);scene.add(torch.target);let torchOn=true;
 const fill=new THREE.PointLight(0xb4c4cd,.23,7);scene.add(fill);
 // Simple browser interaction: orbit by default, optional first-person movement.
+const defaultControls=$('controls').innerHTML;
 let followSheep=false;
 let mode='orbit',orbitYaw=.54,orbitPitch=.37,orbitDist=17,orbitTarget=new THREE.Vector3(-.2,1,0),yaw=0,pitch=0;const player=new THREE.Vector3(0,1.65,8.3);const keys={};let drag=false,lastX=0,lastY=0,callUntil=0,feedState='empty',petUntil=0,noticeTimer;
 function notify(s){$('notice').textContent=s;$('notice').style.opacity=1;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('notice').style.opacity=0,2800);}
 let audioCtx;function bleat(){try{audioCtx=audioCtx||new(window.AudioContext||window.webkitAudioContext)();audioCtx.resume();const osc=audioCtx.createOscillator(),gain=audioCtx.createGain(),filter=audioCtx.createBiquadFilter();osc.type='sawtooth';filter.type='lowpass';filter.frequency.value=600;const t=audioCtx.currentTime;osc.frequency.setValueAtTime(155,t);osc.frequency.linearRampToValueAtTime(110,t+.55);gain.gain.setValueAtTime(0,t);gain.gain.linearRampToValueAtTime(.04,t+.07);gain.gain.exponentialRampToValueAtTime(.001,t+.65);osc.connect(filter);filter.connect(gain);gain.connect(audioCtx.destination);osc.start(t);osc.stop(t+.7);}catch{}}
-function callSheep(){callUntil=performance.now()/1000+4;bleat();$('status').textContent='它抬起头，回应你的声音。';notify('它听到了。');}
-function startStroll(){if(!modelReady)return;feedState='empty';sheepNavigation.startStroll();$('status').textContent='它沿着弧线在围栏内走一圈。';notify('观察前后关节的弯曲，以及转弯时身体的朝向。');}
-function enterWalk(){mode='walk';$('walk').textContent='返回全景';$('aim').style.display='block';$('description').innerHTML='WASD 行走，鼠标转头。<br>靠近羊或食槽，按 E 互动。';try{const p=renderer.domElement.requestPointerLock();if(p&&p.catch)p.catch(()=>notify('按住画面拖动，也能转头。'));}catch{} }
-function overview(){mode='orbit';followSheep=false;if(document.pointerLockElement)document.exitPointerLock();orbitTarget.set(-.2,1,0);orbitDist=17;orbitYaw=.54;orbitPitch=.37;$('walk').textContent='走进牧场';$('aim').style.display='none';$('hint').style.display='none';$('description').innerHTML='拖动画面环绕观察，滚轮拉近。<br>走进围栏，呼唤它，或给食槽添一把草。';}
+function callSheep(){if(mode==='sheep'){bleat();notify('咩——');return;}callUntil=performance.now()/1000+4;bleat();$('status').textContent='它抬起头，回应你的声音。';notify('它听到了。');}
+function startStroll(){if(!modelReady)return;if(mode==='sheep')overview();feedState='empty';sheepNavigation.startStroll();$('status').textContent='它沿着弧线在围栏内走一圈。';notify('观察前后关节的弯曲，以及转弯时身体的朝向。');}
+function enterWalk(){if(mode==='sheep')sheepNavigation.cancel();$('control-sheep').textContent='控制羊';$('controls').innerHTML=defaultControls;mode='walk';$('walk').textContent='返回全景';$('aim').style.display='block';$('description').innerHTML='WASD 行走，鼠标转头。<br>靠近羊或食槽，按 E 互动。';try{const p=renderer.domElement.requestPointerLock();if(p&&p.catch)p.catch(()=>notify('按住画面拖动，也能转头。'));}catch{} }
+function overview(){if(mode==='sheep')sheepNavigation.cancel();$('control-sheep').textContent='控制羊';$('controls').innerHTML=defaultControls;mode='orbit';followSheep=false;if(document.pointerLockElement)document.exitPointerLock();orbitTarget.set(-.2,1,0);orbitDist=17;orbitYaw=.54;orbitPitch=.37;$('walk').textContent='走进牧场';$('aim').style.display='none';$('hint').style.display='none';$('description').innerHTML='拖动画面环绕观察，滚轮拉近。<br>走进围栏，呼唤它，或给食槽添一把草。';}
+function enterSheep(){
+ if(!modelReady)return;sheepNavigation.cancel();feedState='empty';
+ if(document.pointerLockElement)document.exitPointerLock();for(const k in keys)keys[k]=false;
+ mode='sheep';followSheep=true;orbitTarget.copy(sheep.position).add(new THREE.Vector3(0,.9,0));orbitYaw=sheep.rotation.y+Math.PI;orbitPitch=.3;orbitDist=4.8;
+ $('control-sheep').textContent='退出控制';$('walk').textContent='切回人物';$('aim').style.display='none';$('hint').style.display='none';
+ $('description').innerHTML='W 前进 · S 后退 · A / D 转弯。<br>拖动调整镜头，C 咩叫，V 返回全景。';
+ $('controls').innerHTML='<kbd>W</kbd> 前进 <kbd>S</kbd> 后退 <kbd>A D</kbd> 转弯<br>拖动 · 环绕视角 / 滚轮 · 远近<br><kbd>C</kbd> 咩叫 <kbd>V</kbd> 退出控制';
+ $('status').textContent='你正在控制羊。可以随时切换形态。';
+}
+$('inspect-human').onclick=()=>{overview();orbitTarget.copy(player).setY(1);orbitDist=3.7;orbitYaw=.35;orbitPitch=.12;};
+$('control-sheep').onclick=()=>mode==='sheep'?overview():enterSheep();
 $('walk').onclick=()=>mode==='walk'?overview():enterWalk();$('inspect').onclick=()=>{overview();followSheep=true;orbitTarget.copy(sheep.position).add(new THREE.Vector3(0,1.1,0));orbitDist=4.3;orbitYaw=.58;orbitPitch=.19;};$('call').onclick=callSheep;$('stroll').onclick=startStroll;
 renderer.domElement.addEventListener('pointerdown',e=>{drag=true;lastX=e.clientX;lastY=e.clientY;renderer.domElement.setPointerCapture(e.pointerId);});renderer.domElement.addEventListener('pointerup',()=>drag=false);
-addEventListener('mousemove',e=>{const locked=document.pointerLockElement===renderer.domElement;if(!drag&&!locked)return;const dx=locked?e.movementX:e.clientX-lastX,dy=locked?e.movementY:e.clientY-lastY;lastX=e.clientX;lastY=e.clientY;if(mode==='orbit'){orbitYaw-=dx*.006;orbitPitch=Math.max(.08,Math.min(1.1,orbitPitch+dy*.005));}else{yaw-=dx*.003;pitch=Math.max(-1.15,Math.min(1.15,pitch-dy*.003));}});
+addEventListener('mousemove',e=>{const locked=document.pointerLockElement===renderer.domElement;if(!drag&&!locked)return;const dx=locked?e.movementX:e.clientX-lastX,dy=locked?e.movementY:e.clientY-lastY;lastX=e.clientX;lastY=e.clientY;if(mode!=='walk'){orbitYaw-=dx*.006;orbitPitch=Math.max(.08,Math.min(1.1,orbitPitch+dy*.005));}else{yaw-=dx*.003;pitch=Math.max(-1.15,Math.min(1.15,pitch-dy*.003));}});
 renderer.domElement.addEventListener('wheel',e=>{e.preventDefault();orbitDist=Math.max(2.4,Math.min(36,orbitDist+e.deltaY*.015));},{passive:false});
 function near(){if(mode!=='walk')return null;if(player.distanceTo(new THREE.Vector3(3.2,1.65,2.9))<2.45)return 'feed';if(player.distanceTo(sheep.position.clone().setY(1.65))<2.35)return 'sheep';return null;}
-function interact(){const n=near();if(n==='feed'){if(feedState==='empty'){feedState='moving';sheepNavigation.startFeed();hay.visible=true;notify('你添了一把干草。');$('status').textContent='它正慢慢走向食槽。';}else notify('食槽里已经有草了。');}else if(n==='sheep'){petUntil=performance.now()/1000+3;notify('你摸了摸它的额头。它没有躲开。');$('status').textContent='它微微低下头。';}else notify('走近羊或食槽，再按 E。');}
+function interact(){if(mode==='sheep'){notify('W 前进，S 后退，A / D 转弯，C 咩叫。');return;}const n=near();if(n==='feed'){if(feedState==='empty'){feedState='moving';sheepNavigation.startFeed();hay.visible=true;notify('你添了一把干草。');$('status').textContent='它正慢慢走向食槽。';}else notify('食槽里已经有草了。');}else if(n==='sheep'){petUntil=performance.now()/1000+3;notify('你摸了摸它的额头。它没有躲开。');$('status').textContent='它微微低下头。';}else notify('走近羊或食槽，再按 E。');}
 addEventListener('keydown',e=>{if(['KeyW','KeyA','KeyS','KeyD','Space','ArrowUp','ArrowDown'].includes(e.code))e.preventDefault();keys[e.code]=true;if(e.repeat)return;if(e.code==='KeyE')interact();if(e.code==='KeyC')callSheep();if(e.code==='KeyF'){torchOn=!torchOn;notify(torchOn?'手电已打开。':'手电已关闭。');}if(e.code==='KeyV')overview();});addEventListener('keyup',e=>keys[e.code]=false);addEventListener('blur',()=>{for(const k in keys)keys[k]=false;drag=false;});document.addEventListener('pointerlockchange',()=>{for(const k in keys)keys[k]=false;});
 function blocked(x,z){if(Math.abs(x)>18||z>19||z<-16)return true;return colliders.some(c=>Math.abs(x-c.x)<c.w+.26&&Math.abs(z-c.z)<c.d+.26);}
 const clock=new THREE.Clock();let time=0;function frame(){requestAnimationFrame(frame);const dt=Math.min(clock.getDelta(),.04);time+=dt;const now=performance.now()/1000;if(mode==='walk'){let forward=(keys.KeyW?1:0)-(keys.KeyS?1:0),strafe=(keys.KeyD?1:0)-(keys.KeyA?1:0);const norm=Math.hypot(forward,strafe)||1;const speed=2.8*dt/norm;let dx=(-Math.sin(yaw)*forward+Math.cos(yaw)*strafe)*speed,dz=(-Math.cos(yaw)*forward-Math.sin(yaw)*strafe)*speed;if(!blocked(player.x+dx,player.z))player.x+=dx;if(!blocked(player.x,player.z+dz))player.z+=dz;camera.position.copy(player);camera.rotation.order='YXZ';camera.rotation.set(pitch,yaw,0);const n=near();$('hint').style.display=n?'block':'none';$('hint').textContent=n==='feed'?(feedState==='empty'?'[ E ]  给食槽添草':'食槽里有草了'):'[ E ]  轻轻摸它';}else{if(followSheep)orbitTarget.copy(sheep.position).add(new THREE.Vector3(0,.9,0));camera.position.set(orbitTarget.x+Math.sin(orbitYaw)*Math.cos(orbitPitch)*orbitDist,orbitTarget.y+Math.sin(orbitPitch)*orbitDist,orbitTarget.z+Math.cos(orbitYaw)*Math.cos(orbitPitch)*orbitDist);camera.lookAt(orbitTarget);}
-const step=sheepNavigation.update(dt),travel=step.travel,moving=travel>0;walkDistance+=travel;
+const previousSheepYaw=sheep.rotation.y;
+const step=mode==='sheep'?sheepNavigation.drive(dt,(keys.KeyW?1:0)-(keys.KeyS?1:0),(keys.KeyA?1:0)-(keys.KeyD?1:0),blocked):sheepNavigation.update(dt),travel=step.travel,moving=Math.abs(travel)>0;walkDistance+=Math.abs(travel);
+if(mode==='sheep'){if(!drag)orbitYaw+=sheep.rotation.y-previousSheepYaw;$('hint').style.display=step.blocked?'block':'none';$('hint').textContent='前方有障碍，后退并转弯绕开。';}
 if(step.completed==='feed'){feedState='eating';$('status').textContent='它停在食槽旁，低头吃草。';}else if(step.completed==='stroll')$('status').textContent='它走完一圈，重新停下。';
 sheep.position.y=0;legs.forEach((l,i)=>l.rotation.x=moving?Math.sin(time*6+(i%2)*Math.PI)*.22:0);heads.forEach((h,i)=>{let targetY=h.base+Math.sin(time*.5+i*1.7)*.16,targetX=Math.sin(time*.8+i)*.035;if(now<callUntil-i*.4){const to=camera.position.clone().sub(sheep.position);targetY=THREE.MathUtils.clamp(Math.atan2(to.x,to.z)-sheep.rotation.y,-.75,.75);}if(now<petUntil&&i===0)targetX=.4;if(feedState==='eating')targetX=.65+Math.sin(time*1.5+i*2)*.09;h.neck.rotation.y=THREE.MathUtils.lerp(h.neck.rotation.y,targetY,dt*2);h.neck.rotation.x=THREE.MathUtils.lerp(h.neck.rotation.x,targetX,dt*2);});if(sheepMotion)sheepMotion.update(dt,travel,step.curvature);
 if(neckBone&&neckRest){if(feedState==='eating')neckBone.rotateX(-.6);}
 if(headBone&&headRest){headBone.quaternion.copy(headRest);headBone.rotateX(feedState==='eating'?-.55:(now<petUntil?-.15:Math.sin(time*.65)*.035));if(now<callUntil&&!moving){const to=camera.position.clone().sub(sheep.position);headBone.rotateY(THREE.MathUtils.clamp(Math.atan2(to.x,to.z)-sheep.rotation.y,-.4,.4));}}
 if(sheepVariants)sheepVariants.update(dt,travel,step.curvature,time);
+if(caretaker){caretaker.visible=mode!=='walk';caretaker.position.copy(player).setY(0);caretaker.rotation.y=yaw;}
 const look=new THREE.Vector3();camera.getWorldDirection(look);torch.position.copy(camera.position).add(new THREE.Vector3(.12,-.18,0));torch.target.position.copy(camera.position).addScaledVector(look,12);torch.visible=torchOn;fill.position.copy(camera.position);fill.visible=torchOn;lamp.intensity=2.5+Math.sin(time*2.7)*.06+Math.sin(time*13)*.025;renderer.render(scene,camera);}
 frame();
-window.ranch={scene,models,sheep,player,camera,renderer,materialState,startStroll,sheepNavigation,get sheepMotion(){return sheepMotion;},get sheepVariants(){return sheepVariants;},get importedRoot(){return importedRoot;},interact,callSheep,overview,enterWalk,get state(){return{variant:sheepVariants?.current,anatomy:sheepVariants?.counts,walking:sheepNavigation.active,walkDistance,rigJoints:sheepMotion?.joints.length||0,modelReady,modelError,mode,feedState,sheepPosition:sheep.position.toArray(),playerPosition:player.toArray(),meshCount:renderer.info.render.calls};}};
+window.ranch={scene,models,sheep,player,camera,renderer,materialState,startStroll,sheepNavigation,get sheepMotion(){return sheepMotion;},get sheepVariants(){return sheepVariants;},get importedRoot(){return importedRoot;},get caretaker(){return caretaker;},interact,callSheep,overview,enterWalk,enterSheep,get state(){return{variant:sheepVariants?.current,anatomy:sheepVariants?.counts,walking:sheepNavigation.active||(mode==='sheep'&&Math.abs(sheepNavigation.state.speed)>.003),walkDistance,rigJoints:sheepMotion?.joints.length||0,modelReady,modelError,mode,feedState,sheepPosition:sheep.position.toArray(),playerPosition:player.toArray(),meshCount:renderer.info.render.calls};}};
